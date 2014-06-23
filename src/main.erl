@@ -12,7 +12,7 @@
 -import(file, []).
 
 %% API
--export([scanf/0, print/1]).
+-export([scanf/0, print/1, getToken/4]).
 
 scanf() ->
   io:format("Hello World ~n"),
@@ -53,6 +53,36 @@ readAllLines(Fd) ->
       [Data | readAllLines(Fd)];
     eof ->
       []
+  end.
+
+getToken(Machine, Port, User, Password) ->
+  inets:start(),
+  URL = lists:concat(["http://", Machine, ":", Port, "/arcgis/admin/generateToken"]),
+  Params = [{"username", User},
+            {"password", Password},
+            {"client", "requestip"},
+            {"f","pjson"}],
+
+  ParamsList = lists:map(
+      fun(Tuple) ->
+        string:join([element(1, Tuple),element(2, Tuple)], "=")
+      end,
+    Params),
+
+  ReqBody = string:join(ParamsList, "&"),
+  io:format("~s~n",[ReqBody]),
+
+  case httpc:request(post, {
+        URL,
+        [], %% headers
+        "application/x-www-form-urlencoded", %% content-type
+        ReqBody
+      }, [], []) of
+    {ok, {{Version,Status, Reason}, Headers, ResBody}} ->
+      {struct,[
+        {<<"token">>, Token}, {<<"expires">>, Expiration}
+      ]} = mochijson2:decode(ResBody),
+      Token
   end.
 
 
