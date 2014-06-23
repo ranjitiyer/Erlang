@@ -10,7 +10,7 @@
 -author("ranj4711").
 
 -include("types.hrl").
--import(util, [println/1, println/2, current_time/0]).
+-import(util, [println/1, println/2, current_time/0, readLines/1]).
 
 %% API
 -export([publish/0]).
@@ -34,16 +34,35 @@ publish() ->
   Token = getToken(Admin, Pwd, Machine, Port),
 
   %% Parse the input file and get a list of Service Infos
-  ServiceInfos = getServiceInfos(InputFile).
+  AllLines = readLines(InputFile),
+
+  %% Turn lines into list of records
+  ServiceInfos = makeServiceInfos(AllLines, []).
 
 deleteUploads() ->
   io:format("Delete all uploaded items").
 
 
--spec getServiceInfos(string()) -> [serviceinfo()].
-getServiceInfos (InputFile) ->
-  [].
-
+-spec makeServiceInfos(list()) -> [serviceinfo()].
+makeServiceInfos([Line | Lines], Infos) ->
+  case string:strip(Line) of
+    %% ignore commented line
+    [$# | _] ->
+      ignore;
+    %% ignore the blank line
+    [$\n] ->
+      ignore;
+    _ ->
+      [SD, Folder, Service, Cluster] = string:tokens(Line, "|"),
+      [_, SDPath]      = string:tokens(SD, "="),
+      [_, FldrName]    = string:tokens(Folder, "="),
+      [_, ServiceName] = string:tokens(Service, "="),
+      [_, ClusterName] = string:tokens(Cluster, "="),
+      io:format("~s, ~s, ~s, ~s", [SDPath, FldrName, ServiceName, ClusterName]),
+      makeServiceInfos(Lines, [Infos |
+        #serviceinfo{sd = SDPath, folder = FldrName, service = ServiceName, cluster = ClusterName}])
+  end,
+  Infos.
 
 getToken(Admin, Pwd, Machine, Port) ->
   io:format("Get the token").
