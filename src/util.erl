@@ -22,7 +22,7 @@ println(Format, Args) ->
 readlines(File) ->
   case file:open(File, [read]) of
     {ok, Fd} ->
-      readLine(Fd);
+      readline(Fd);
     {error, Reason} ->
       fail
   end.
@@ -30,7 +30,7 @@ readlines(File) ->
 readline(Fd) ->
   case file:read_line(Fd) of
     {ok, Data} ->
-      [Data | readLine(Fd)];
+      [Data | readline(Fd)];
     eof ->
       []
   end.
@@ -46,3 +46,4 @@ current_time() ->
 
   io_lib:format("~2w ~s ~4w ~2w:~2..0w:~2..0w.~6..0w",
     [Day,Mstr,Year,Hour,Minute,Second,Micro]).
+

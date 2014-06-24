@@ -13,11 +13,14 @@
 -import(util, [println/1, println/2, current_time/0, readlines/1]).
 
 %% API
--export([publish/0]).
+-export([publish/0, get_machines/4, get_token/4]).
 
 
 publish() ->
   current_time(),
+
+  % We need HTTP
+  inets:start(),
 
   %% Get inputs
   println("This tool publishes services defined in pipe-delimited text file."),
@@ -25,7 +28,7 @@ publish() ->
   Line = string:strip(io:get_line(">"), right, $\n),
   {Machine, Port, Admin, Pwd, InputFile} = list_to_tuple(string:tokens(Line, " ")),
 
-  %% Context URLs
+  %% URLs
   ContextUrl  = lists:concat(["http://", Machine, ":", Port, "/arcgis/admin"]),
   ServicesUrl = lists:concat(["http://", Machine, ":", Port, "/arcgis/rest/services"]),
 
@@ -37,7 +40,6 @@ publish() ->
 
   %% Admin token
   Token = get_token(Admin, Pwd, Machine, Port).
-
 
 -spec make_serviceinfos([string()], [serviceinfo()]) -> [serviceinfo()].
 make_serviceinfos([Line | Lines], Infos) ->
@@ -60,7 +62,42 @@ make_serviceinfos([Line | Lines], Infos) ->
   end,
   Infos.
 
--spec get_token([string()], [serviceinfo()]) -> [serviceinfo()].
+get_machines(Machine, Port, User, Password) ->
+  inets:start(),
+  Token = get_token(Machine, Port, User, Password),
+  URL = lists:concat(["http://", Machine, ":", Port, "/arcgis/admin/machines"]),
+  Params = [{"token", Token}, {"f","pjson"}],
+  ParamsList = lists:map(
+    fun(Tuple) ->
+      string:join([element(1, Tuple),element(2, Tuple)], "=")
+    end,
+    Params),
+  ReqBody = string:join(ParamsList, "&"),
+  io:format("~s~n",[ReqBody]),
+
+  case httpc:request(post, {
+    URL,
+    [], %% headers
+    "application/x-www-form-urlencoded", %% content-type
+    ReqBody }, [], []) of
+    {ok, {{Version,Status, Reason}, Headers, ResBody}} ->
+      JsonResponse = mochijson2:decode(ResBody),
+
+      % get machines array
+      MachinesArray = json:get_array(JsonResponse, <<"machines">>),
+
+      % pull out admin urls for each
+      MachineUrls = lists:map(
+        fun(MachineJson) ->
+          json:get_string(MachineJson, <<"adminURL">>)
+        end,
+        MachinesArray),
+
+      % return the list
+      MachineUrls
+  end.
+
+
 get_token(Machine, Port, User, Password) ->
   inets:start(),
   URL = lists:concat(["http://", Machine, ":", Port, "/arcgis/admin/generateToken"]),
@@ -85,8 +122,8 @@ get_token(Machine, Port, User, Password) ->
                             "application/x-www-form-urlencoded", %% content-type
                             ReqBody }, [], []) of
     {ok, {{Version,Status, Reason}, Headers, ResBody}} ->
-      {struct,[
-        {<<"token">>, Token}, {<<"expires">>, Expiration}
-      ]} = mochijson2:decode(ResBody),
-      binary_to_list(Token)
+      JsonResponse = mochijson2:decode(ResBody),
+      Token = json:get_string(JsonResponse, <<"token">>),
+      Token
   end.
+
