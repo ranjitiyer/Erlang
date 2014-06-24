@@ -12,21 +12,6 @@
 %% API
 -export([get_string/2, get_array/2]).
 
-%% get_string(MochiJson, Key) ->
-%%   {struct, TupleArray} = MochiJson,
-%%   case lists:keyfind(Key,1,TupleArray) of
-%%     false ->
-%%       nil;
-%%     {Key, Value} ->
-%%       if
-%%         is_bitstring(Value) ->
-%%           io:format("Returning ~s~n",[Value]),
-%%           binary_to_list(Value);
-%%         true ->
-%%           nil
-%%       end
-%%   end.
-
 get_string(MochiJson, Key) ->
   case get(MochiJson, Key) of
     Value when is_bitstring(Value) ->
@@ -50,14 +35,3 @@ get(MochiJson, Key) ->
 
 get_array(MochiJson, Key) ->
   get(MochiJson, Key).
-
-%% get_array(MochiJson, Key) ->
-%%   case MochiJson of
-%%     {struct, TupleArray} when is_list(TupleArray)->
-%%       element(2,lists:keyfind(Key,1,TupleArray));
-%%     _ ->
-%%       io:format("Returning nil"),
-%%       nil
-%%   end.
-
-
