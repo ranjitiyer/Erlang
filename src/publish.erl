@@ -13,7 +13,7 @@
 -import(util, [println/1, println/2, current_time/0, readlines/1]).
 
 %% API
--export([publish/0, get_machines/4, get_token/4]).
+-export([publish/0, get_machines/4, get_token/4, upload/5]).
 
 
 publish() ->
@@ -65,7 +65,7 @@ make_serviceinfos([Line | Lines], Infos) ->
 get_machines(Machine, Port, User, Password) ->
   inets:start(),
   Token = get_token(Machine, Port, User, Password),
-  URL = lists:concat(["http://", Machine, ":", Port, "/arcgis/admin/machines"]),
+  URL = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/admin/machines",
   Params = [{"token", Token}, {"f","pjson"}],
   ParamsList = lists:map(
     fun(Tuple) ->
@@ -100,7 +100,7 @@ get_machines(Machine, Port, User, Password) ->
 
 get_token(Machine, Port, User, Password) ->
   inets:start(),
-  URL = lists:concat(["http://", Machine, ":", Port, "/arcgis/admin/generateToken"]),
+  URL = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/admin/generateToken",
   Params = [
     {"username", User},
     {"password", Password},
@@ -127,3 +127,44 @@ get_token(Machine, Port, User, Password) ->
       Token
   end.
 
+upload(Machine, Port, User, Password, File) ->
+  inets:start(),
+  Token = get_token(Machine, Port, User, Password),
+  io:format("Token is ~s~n", [Token]),
+  io:format("Filename is ~s~n", [filename:basename(File)]),
+  URL = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/admin/uploads/upload",
+  Data = binary_to_list(element(2, file:read_file(File))),
+  Boundary = "------------a450glvjfEoqerAc1p431paQlfDac152cadADfd",
+  Body = format_multipart_formdata(Boundary, [{token, Token}, {f, "pjson"}],
+    [{itemFile, filename:basename(File), Data}]),
+  ContentType = lists:concat(["multipart/form-data; boundary=", Boundary]),
+  Headers = [{"Content-Length", integer_to_list(length(Body))}],
+%%   io:format("~s~n", [Body]),
+  case httpc:request(post,{ URL,Headers,ContentType,Body}, [], []) of
+    {ok, {{Version,Status, Reason}, ResponseHeaders, ResBody}} ->
+      JsonResponse = mochijson2:decode(ResBody),
+      JsonResponse
+  end.
+
+
+%% @doc encode fields and file for HTTP post multipart/form-data.
+%% @reference Inspired by <a href="http://code.activestate.com/recipes/146306/">Python implementation</a>.
+format_multipart_formdata(Boundary, Fields, Files) ->
+  FieldParts = lists:map(fun({FieldName, FieldContent}) ->
+    [lists:concat(["--", Boundary]),
+      lists:concat(["Content-Disposition: form-data; name=\"",atom_to_list(FieldName),"\""]),
+      "",
+      FieldContent]
+  end, Fields),
+  FieldParts2 = lists:append(FieldParts),
+  FileParts = lists:map(fun({FieldName, FileName, FileContent}) ->
+     [lists:concat(["--", Boundary]),
+      lists:concat(["Content-Disposition: form-data; name=\"",atom_to_list(FieldName),"\"; filename=\"",FileName,"\""]),
+      lists:concat(["Content-Type: ", "application/octet-stream"]),
+      "",
+      FileContent]
+  end, Files),
+  FileParts2 = lists:append(FileParts),
+  EndingParts = [lists:concat(["--", Boundary, "--"]), ""],
+  Parts = lists:append([FieldParts2, FileParts2, EndingParts]),
+  string:join(Parts, "\r\n").

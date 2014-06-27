@@ -12,7 +12,7 @@
 -import(file, []).
 
 %% API
--export([scanf/0, print/1, getToken/4]).
+-export([scanf/0, print/1, getToken/4, pingtest/0, pongtest/1]).
 
 scanf() ->
   io:format("Hello World ~n"),
@@ -57,7 +57,7 @@ readAllLines(Fd) ->
 
 getToken(Machine, Port, User, Password) ->
   inets:start(),
-  URL = lists:concat(["http://", Machine, ":", Port, "/arcgis/admin/generateToken"]),
+  URL = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/admin/generateToken",
   Params = [{"username", User},
             {"password", Password},
             {"client", "requestip"},
@@ -83,6 +83,20 @@ getToken(Machine, Port, User, Password) ->
         {<<"token">>, Token}, {<<"expires">>, Expiration}
       ]} = mochijson2:decode(ResBody),
       Token
+  end.
+
+pingtest() ->
+  Pid = spawn(main, pongtest, [self()]),
+  Pid ! {"Hello"},
+  receive
+    {ok, Greeting} -> io:format("Ping received a response from pong ~n", [])
+  end.
+
+pongtest(Ref) ->
+  receive
+    {Greeting} ->
+      io:format("Pong received ~s~n", [Greeting]),
+      Ref ! {ok, "Greetings received"}
   end.
 
 
