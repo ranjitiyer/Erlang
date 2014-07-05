@@ -130,8 +130,6 @@ get_token(Machine, Port, User, Password) ->
 upload(Machine, Port, User, Password, File) ->
   inets:start(),
   Token = get_token(Machine, Port, User, Password),
-  io:format("Token is ~s~n", [Token]),
-  io:format("Filename is ~s~n", [filename:basename(File)]),
   URL = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/admin/uploads/upload",
   Data = binary_to_list(element(2, file:read_file(File))),
   Boundary = "------------a450glvjfEoqerAc1p431paQlfDac152cadADfd",

@@ -47,3 +47,6 @@ current_time() ->
   io_lib:format("~2w ~s ~4w ~2w:~2..0w:~2..0w.~6..0w",
     [Day,Mstr,Year,Hour,Minute,Second,Micro]).
 
+
+
+
