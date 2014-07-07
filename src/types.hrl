@@ -12,7 +12,8 @@
   sd                  :: string(),
   folder  = "/"       :: string(),
   service             :: string(),
-  cluster = "default" :: string()
+  cluster = "default" :: string(),
+  uploadid            :: string()
 }).
 
 -type serviceinfo() :: serviceinfo().

@@ -30,7 +30,7 @@ readlines(File) ->
 readline(Fd) ->
   case file:read_line(Fd) of
     {ok, Data} ->
-      [Data | readline(Fd)];
+      [string:strip(Data, both, $\n) | readline(Fd)];
     eof ->
       []
   end.

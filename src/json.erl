@@ -10,7 +10,7 @@
 -author("ranj4711").
 
 %% API
--export([get_string/2, get_array/2]).
+-export([get_string/2, get_array/2, get_object/2]).
 
 get_string(MochiJson, Key) ->
   case get(MochiJson, Key) of
@@ -19,6 +19,12 @@ get_string(MochiJson, Key) ->
     _ ->
       nil
   end.
+
+get_object(MochiJson, Key) ->
+  get(MochiJson, Key).
+
+get_array(MochiJson, Key) ->
+  get(MochiJson, Key).
 
 get(MochiJson, Key) ->
   case MochiJson of
@@ -32,6 +38,3 @@ get(MochiJson, Key) ->
     _ ->
       nil
   end.
-
-get_array(MochiJson, Key) ->
-  get(MochiJson, Key).

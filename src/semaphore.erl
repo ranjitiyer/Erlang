@@ -33,7 +33,6 @@ release(Semaphore) ->
   end.
 
 loop(Permits, 0) ->
-  io:format("~B ~n", [0]),
   receive
     {From, release} ->
       From ! released,
