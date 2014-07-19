@@ -10,15 +10,16 @@
 -author("ranj4711").
 
 -include("types.hrl").
--import(util, [println/1, println/2, current_time/0, readlines/1]).
+-import(util, [println/1, println/2, current_time/0, readlines/1,get_object/2,get_string/2,get_array/2]).
 -import(semaphore, [new/1,acquire/1,release/1]).
--import(json, [get_object/2,get_string/2,get_array/2]).
+-import(http, [post/3, get_status/1, get_body/1, get_reason/1, post_upload/4]).
+-import(ej, [get/2,get/3,set/3]).
 
 %For testing
 -export([make_serviceinfos/2]).
 
 %% API
--export([publish/0, get_machines/4, get_token/4, upload/7]).
+-export([publish/0, get_machines/4, get_token/4, upload/7, publish_sd/7]).
 
 publish() ->
   current_time(),
@@ -32,10 +33,6 @@ publish() ->
   Line = string:strip(io:get_line(">"), right, $\n),
   {Machine, Port, Admin, Pwd, InputFile} = list_to_tuple(string:tokens(Line, " ")),
 
-  %% URLs
-  ContextUrl  = lists:concat(["http://", Machine, ":", Port, "/arcgis/admin"]),
-  ServicesUrl = lists:concat(["http://", Machine, ":", Port, "/arcgis/rest/services"]),
-
   %% Parse the input file and get a list of Service Infos
   AllLines = readlines(InputFile),
 
@@ -43,20 +40,87 @@ publish() ->
   ServiceInfos = make_serviceinfos(AllLines, []),
 
   % Limit to 10 uploaders
-  UploadSemaphore = semaphore:new(10),
+  {ok, UploadSemaphore} = semaphore:new(10),
   lists:foreach(
     fun(ServiceInfo) ->
       spawn(?MODULE, upload, [Machine, Port, Admin, Pwd, ServiceInfo, UploadSemaphore, self()])
     end, ServiceInfos),
 
-  receive
-    #serviceinfo{uploadid=UploadId,folder=Folder,service=Service,cluster=Cluster} ->
-      % Spawn publishing tool and publish
-      ok
+  % Print the uploadids
+  {ok, PublisherSemaphore} = semaphore:new(3),
+  lists:foreach(
+    fun (ServiceInfo) ->
+      receive
+        #serviceinfo{uploadid=UploadId,folder=Folder,service=Service,cluster=Cluster} ->
+          spawn(?MODULE, publish_sd,
+            [Machine, Port, Admin, Pwd,
+              #serviceinfo{uploadid=UploadId,folder=Folder,service=Service,cluster=Cluster},
+              PublisherSemaphore, self()])
+      end
+    end, ServiceInfos).
+
+publish_sd(Machine,Port,User,Password,ServiceInfo,PublisherSemaphore,Caller) ->
+  semaphore:acquire(PublisherSemaphore),
+
+  Token = get_token(Machine,Port, User, Password),
+  ServiceConfigUrl = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/admin/uploads/" ++ ServiceInfo#serviceinfo.uploadid ++ "/serviceconfiguration.json",
+  Response = http:post(ServiceConfigUrl,[],[{"token", Token}, {"f","pjson"}]),
+
+  case http:get_status(Response) of
+    200 ->
+      ResponseJson = mochijson2:decode(http:get_body(Response)),
+
+      % Override servicename, cluter and folder properties
+      ej:set({"service","serviceName"}, ResponseJson, list_to_binary(ServiceInfo#serviceinfo.service)),
+      ej:set({"service","clusterName"}, ResponseJson, list_to_binary(ServiceInfo#serviceinfo.cluster)),
+      ej:set({"folderName"}, ResponseJson, list_to_binary(ServiceInfo#serviceinfo.folder)),
+
+      % Submit publishing job
+      Submitjoburl = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/rest/services/System/PublishingTools/GPServer/Publish%20Service%20Definition/submitJob",
+      Params = [{"token", Token}, {"f","pjson"}, {"in_sdp_id", ServiceInfo#serviceinfo.uploadid},{"in_config_overwrite", mochijson2:encode(ResponseJson)}],
+      %%io:format("URL is ~p~n", [Submitjoburl]),
+
+      Response2 = http:post(Submitjoburl,[],Params),
+      case http:get_status(Response2) of
+        200 ->
+          ResponseJson2 = mochijson2:decode(http:get_body(Response2)),
+          io:format("Job ID ~p~n", [ej:get({"jobId"}, ResponseJson2)]),
+
+          %% Check status
+          StatusChecker = fun(JobId) ->
+              %% Get status
+              Status = "success",
+
+              %% Check it
+              case Status of
+                "esriJobSucceeded" ->
+                  success;
+                "esriJobSubmitted" orelse "esriJobExecuting" ->
+                  %% If now is less than expired
+                  %% call status checker else timeout
+                  timeout;
+                "esriJobExecutionFailed" ->
+                  error
+              end
+            end,
+
+          %% Call it and wait for results
+          case StatusChecker(ej:get({"jobId"}, ResponseJson2), self()) of
+            timeout ->
+              ok;
+            error ->
+              ok;
+            success ->
+              ok
+          end;
+      _ ->
+          io:format("Job submission failed ~p~n", [http:get_reason(Response2)])
+      end;
+   _ ->
+      io:format("Service config request failed ~p~n", [http:get_reason(Response)])
   end,
 
-  %% Admin token
-  Token = get_token(Admin, Pwd, Machine, Port).
+  semaphore:release(PublisherSemaphore).
 
 -spec make_serviceinfos([string()], [serviceinfo()]) -> [serviceinfo()].
 make_serviceinfos([Line | Lines], Infos) ->
@@ -69,7 +133,6 @@ make_serviceinfos([Line | Lines], Infos) ->
       make_serviceinfos(Lines, Infos);
     _ ->
       [SD, Folder, Service, Cluster] = string:tokens(Line, "|"),
-
       [_, SDPath]      = string:tokens(SD, "="),
       [_, FldrName]    = string:tokens(Folder, "="),
       [_, ServiceName] = string:tokens(Service, "="),
@@ -85,41 +148,28 @@ make_serviceinfos([], Infos) ->
 
 get_machines(Machine, Port, User, Password) ->
   inets:start(),
+
   Token = get_token(Machine, Port, User, Password),
   URL = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/admin/machines",
   Params = [{"token", Token}, {"f","pjson"}],
-  ParamsList = lists:map(
-    fun(Tuple) ->
-      string:join([element(1, Tuple),element(2, Tuple)], "=")
-    end,
-    Params),
-  ReqBody = string:join(ParamsList, "&"),
-  io:format("~s~n",[ReqBody]),
 
-  case httpc:request(post, {
-    URL,
-    [], %% headers
-    "application/x-www-form-urlencoded", %% content-type
-    ReqBody }, [], []) of
-    {ok, {{Version,Status, Reason}, Headers, ResBody}} ->
-      JsonResponse = mochijson2:decode(ResBody),
-
-      % get machines array
-      MachinesArray = json:get_array(JsonResponse, <<"machines">>),
-
-      % pull out admin urls for each
+  Response = http:post(URL,[],Params),
+  case http:get_status(Response) of
+    200 ->
+      Body = http:get_body(Response),
+      JsonResponse = mochijson2:decode(Body),
+      MachinesList = json:get_array(JsonResponse, <<"machines">>),
       MachineUrls = lists:map(
         fun(MachineJson) ->
           json:get_string(MachineJson, <<"adminURL">>)
         end,
-        MachinesArray),
+        MachinesList),
 
-      % return the list
-      MachineUrls
+      %% Return the list of machines
+      MachineUrls;
+    _ ->
+      io:format("Error ~p~n", http:get_reason(Response))
   end.
-
-%% publish(Machine, Port, Admin, User, Pwd, ServiceInfo) ->
-%%   ok.
 
 get_token(Machine, Port, User, Password) ->
   inets:start(),
@@ -128,73 +178,40 @@ get_token(Machine, Port, User, Password) ->
     {"username", User},
     {"password", Password},
     {"client", "requestip"},
-    {"f","pjson"}],
+    {"f","pjson"}
+  ],
 
-  ParamsList = lists:map(
-    fun(Tuple) ->
-      string:join([element(1, Tuple),element(2, Tuple)], "=")
-    end,
-  Params),
-
-  ReqBody = string:join(ParamsList, "&"),
-  io:format("~s~n",[ReqBody]),
-
-  case httpc:request(post, {
-                            URL,
-                            [], %% headers
-                            "application/x-www-form-urlencoded", %% content-type
-                            ReqBody }, [], []) of
-    {ok, {{Version,Status, Reason}, Headers, ResBody}} ->
-      JsonResponse = mochijson2:decode(ResBody),
+  Response = http:post(URL,[],Params),
+  case http:get_status(Response) of
+    200 ->
+      Body = http:get_body(Response),
+      JsonResponse = mochijson2:decode(Body),
       Token = json:get_string(JsonResponse, <<"token">>),
-      Token
+      Token;
+    _ ->
+      io:format("Error ~p~n", [http:get_reason(Response)])
   end.
 
-upload(Machine, Port, User, Password,
-    #serviceinfo{sd = SD} = ServiceInfo, Semaphore, Caller) ->
+upload(Machine, Port, User, Password,#serviceinfo{sd = SD} = ServiceInfo,Semaphore,Caller) ->
   semaphore:acquire(Semaphore),
   inets:start(),
-  Token = get_token(Machine, Port, User, Password),
+  Token = get_token(Machine,Port, User, Password),
   URL = "http://" ++ Machine ++ ":" ++ Port ++ "/arcgis/admin/uploads/upload",
 
-  io:format("Preparing to upload ~p~n", [SD]),
-  Data = binary_to_list(element(2, file:read_file(SD))),
-  Boundary = "------------a450glvjfEoqerAc1p431paQlfDac152cadADfd",
-  Body = format_multipart_formdata(Boundary, [{token, Token}, {f, "pjson"}],
-    [{itemFile, filename:basename(SD), Data}]),
-  ContentType = lists:concat(["multipart/form-data; boundary=", Boundary]),
-  Headers = [{"Content-Length", integer_to_list(length(Body))}],
+  Params = [{token, Token}, {f, "pjson"}],
+  FileParam = {itemFile, SD},
 
-  case httpc:request(post,{ URL,Headers,ContentType,Body}, [], []) of
-    {ok, {{Version,Status, Reason}, ResponseHeaders, ResBody}} ->
-      JsonResponse = mochijson2:decode(ResBody),
+  Response = http:post_upload(URL,[],Params,FileParam),
 
-      % send response to caller
+  case http:get_status(Response) of
+    200 ->
+      JsonResponse = mochijson2:decode(http:get_body(Response)),
       ItemObject = json:get_object(JsonResponse, <<"item">>),
       UploadId = json:get_string(ItemObject, <<"itemID">>),
-      Caller ! ServiceInfo#serviceinfo{uploadid = UploadId}
+
+      % Send reponse back to parent
+      Caller ! ServiceInfo#serviceinfo{uploadid = UploadId};
+    _ ->
+      io:format("Error ~p~n",[http:get_reason(Response)])
   end,
   semaphore:release(Semaphore).
-
-%% @doc encode fields and file for HTTP post multipart/form-data.
-%% @reference Inspired by <a href="http://code.activestate.com/recipes/146306/">Python implementation</a>.
-format_multipart_formdata(Boundary, Fields, Files) ->
-  FieldParts = lists:map(fun({FieldName, FieldContent}) ->
-    [lists:concat(["--", Boundary]),
-      lists:concat(["Content-Disposition: form-data; name=\"",atom_to_list(FieldName),"\""]),
-      "",
-      FieldContent]
-  end, Fields),
-  FieldParts2 = lists:append(FieldParts),
-  FileParts = lists:map(fun({FieldName, FileName, FileContent}) ->
-     [lists:concat(["--", Boundary]),
-      lists:concat(["Content-Disposition: form-data; name=\"",atom_to_list(FieldName),"\"; filename=\"",FileName,"\""]),
-      lists:concat(["Content-Type: ", "application/octet-stream"]),
-      "",
-      FileContent]
-  end, Files),
-  FileParts2 = lists:append(FileParts),
-  EndingParts = [lists:concat(["--", Boundary, "--"]), ""],
-  Parts = lists:append([FieldParts2, FileParts2, EndingParts]),
-  string:join(Parts, "\r\n").
-
